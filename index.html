@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>2048 — Functional JS</title>
+  <style>
+    :root{--bg:#faf8ef;--board:#bbada0;--empty:#cdc1b4;--dark:#776e65;--light:#f9f6f2;--accent:#8f7a66}
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;background:var(--bg);color:var(--dark);display:flex;align-items:center;justify-content:center}
+    .app{width:min(92vw,720px)}
+    header{display:flex;align-items:flex-end;justify-content:space-between;margin:16px 0}
+    h1{font-size:42px;line-height:1;margin:0;color:var(--accent)}
+    .stats{display:flex;gap:12px}
+    .pill{background:#bbada0;color:var(--light);padding:8px 12px;border-radius:10px;text-align:center;min-width:84px}
+    .pill .num{display:block;font-weight:700;font-size:20px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 14px}
+    button,input,select{font:inherit}
+    button{cursor:pointer;border:0;border-radius:10px;padding:10px 12px;background:#8f7a66;color:#fff}
+    button.secondary{background:#d0c5bb;color:#3a322c}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    input[type=number]{width:80px;padding:8px;border-radius:8px;border:1px solid #ccbfb5;background:#fff}
+    .board{background:var(--board);padding:10px;border-radius:12px;display:grid;gap:10px;position:relative}
+    .cell{background:var(--empty);border-radius:10px;display:grid;place-items:center;height:0;padding-bottom:100%;position:relative;overflow:hidden}
+    .tile{position:absolute;inset:0;display:grid;place-items:center;border-radius:10px;font-weight:700;font-size:calc(16px + 0.9vmin);transition:transform .08s ease}
+    .tile span{transform:translateY(-1px)}
+    .msg{margin-top:12px;padding:10px;border-radius:10px;background:#fff3cd;border:1px solid #ffe69c;color:#664d03;display:none}
+    .msg.show{display:block}
+    .kbd{background:#eee;border-radius:6px;padding:2px 6px;border:1px solid #ddd}
+    footer{margin-top:18px;font-size:14px;color:#6b615a}
+
+    /* Tile color theme */
+    .v2{background:#eee4da;color:#776e65}
+    .v4{background:#ede0c8;color:#776e65}
+    .v8{background:#f2b179;color:#f9f6f2}
+    .v16{background:#f59563;color:#f9f6f2}
+    .v32{background:#f67c5f;color:#f9f6f2}
+    .v64{background:#f65e3b;color:#f9f6f2}
+    .v128{background:#edcf72;color:#f9f6f2;font-size:calc(14px + 0.8vmin)}
+    .v256{background:#edcc61;color:#f9f6f2;font-size:calc(14px + 0.8vmin)}
+    .v512{background:#edc850;color:#f9f6f2;font-size:calc(14px + 0.8vmin)}
+    .v1024{background:#edc53f;color:#f9f6f2;font-size:calc(12px + 0.7vmin)}
+    .v2048{background:#edc22e;color:#f9f6f2;font-size:calc(12px + 0.7vmin)}
+    .v4096{background:#3c3a32;color:#f9f6f2}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>2048</h1>
+      <div class="stats">
+        <div class="pill" title="Sum of merged tiles">
+          <small>Score</small>
+          <span id="score" class="num">0</span>
+        </div>
+        <div class="pill" title="Best score in this session">
+          <small>Best</small>
+          <span id="best" class="num">0</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="controls">
+      <button id="btn-up" aria-label="Up">↑ Up</button>
+      <button id="btn-left" aria-label="Left">← Left</button>
+      <button id="btn-down" aria-label="Down">↓ Down</button>
+      <button id="btn-right" aria-label="Right">→ Right</button>
+      <button id="restart" class="secondary" title="Restart the game">↻ Restart</button>
+      <label style="display:flex;align-items:center;gap:6px;margin-left:auto">
+        Size
+        <input id="size" type="number" min="3" max="8" value="4" />
+        <button id="apply" class="secondary" title="Apply board size">Apply</button>
+      </label>
+    </div>
+
+    <div id="board" class="board" aria-label="Game board" role="grid"></div>
+    <div id="message" class="msg"></div>
+
+    <footer>
+      Use keyboard arrows (<span class="kbd">↑</span> <span class="kbd">↓</span> <span class="kbd">←</span> <span class="kbd">→</span>) or buttons. Reach a tile of 2048 to win. New tile spawns after each valid move.
+    </footer>
+  </div>
+
+<script type="module">
+/***********************************
+ * 2048 — Functional JS implementation
+ * - Pure helpers return new boards
+ * - UI is a thin layer over pure logic
+ ***********************************/
+
+// ---------- Pure helpers (no DOM) ---------- //
+const clone = (m) => m.map(r => r.slice());
+const zeros = (n) => Array.from({length:n}, () => 0);
+const emptyBoard = (N) => Array.from({length:N}, () => zeros(N));
+const randChoice = (arr) => arr[Math.floor(Math.random()*arr.length)];
+
+/** Return list of [r,c] positions that are empty (0) */
+const empties = (board) => {
+  const pos = [];
+  for (let r=0;r<board.length;r++) for (let c=0;c<board.length;c++) if (!board[r][c]) pos.push([r,c]);
+  return pos;
+};
+
+/** Place one random tile (2 with 90%, 4 with 10%) */
+function addRandomTile(board){
+  const spots = empties(board);
+  if (spots.length === 0) return board;
+  const [r,c] = randChoice(spots);
+  const v = Math.random() < 0.9 ? 2 : 4;
+  const next = clone(board);
+  next[r][c] = v;
+  return next;
+}
+
+/** Initialize a new board with two tiles */
+function initBoard(N){
+  let b = emptyBoard(N);
+  b = addRandomTile(b);
+  b = addRandomTile(b);
+  return b;
+}
+
+const transpose = (m) => m[0].map((_,i) => m.map(row => row[i]));
+const reverseRows = (m) => m.map(row => row.slice().reverse());
+
+/**
+ * Slide one row/col to the left, merging equals.
+ * Returns {line, scoreDelta}
+ */
+function slideLineLeft(line){
+  const nonZero = line.filter(x => x !== 0);
+  const merged = [];
+  let score = 0;
+  for (let i=0;i<nonZero.length;i++){
+    if (nonZero[i] !== 0 && nonZero[i] === nonZero[i+1]){
+      const val = nonZero[i] * 2;
+      merged.push(val);
+      score += val;
+      i++; // skip next
+    } else {
+      merged.push(nonZero[i]);
+    }
+  }
+  while (merged.length < line.length) merged.push(0);
+  return { line: merged, scoreDelta: score };
+}
+
+/** Apply slide to each row for a left move */
+function moveLeft(board){
+  let moved = false; let gained = 0;
+  const next = board.map(row => {
+    const {line, scoreDelta} = slideLineLeft(row);
+    if (!moved && line.some((v,i)=>v!==row[i])) moved = true;
+    gained += scoreDelta;
+    return line;
+  });
+  return { board: next, moved, scoreDelta: gained };
+}
+
+function moveRight(board){
+  const rev = reverseRows(board);
+  const {board: slid, moved, scoreDelta} = moveLeft(rev);
+  return { board: reverseRows(slid), moved, scoreDelta };
+}
+
+function moveUp(board){
+  const t = transpose(board);
+  const {board: slid, moved, scoreDelta} = moveLeft(t);
+  return { board: transpose(slid), moved, scoreDelta };
+}
+
+function moveDown(board){
+  const t = transpose(board);
+  const {board: slid, moved, scoreDelta} = moveRight(t);
+  return { board: transpose(slid), moved, scoreDelta };
+}
+
+/** Check if any move is possible */
+function anyMovesAvailable(board){
+  if (empties(board).length) return true;
+  const N = board.length;
+  for (let r=0;r<N;r++){
+    for (let c=0;c<N;c++){
+      const v = board[r][c];
+      if ((r+1<N && board[r+1][c]===v) || (c+1<N && board[r][c+1]===v)) return true;
+    }
+  }
+  return false;
+}
+
+/** Check win */
+const has2048 = (board) => board.some(row => row.some(v => v>=2048));
+
+// ---------- State & UI bindings ---------- //
+let state = {
+  size: 4,
+  board: initBoard(4),
+  score: 0,
+  best: 0,
+  won: false,
+  over: false,
+};
+
+const $board = document.getElementById('board');
+const $score = document.getElementById('score');
+const $best = document.getElementById('best');
+const $msg = document.getElementById('message');
+const $size = document.getElementById('size');
+
+function setMessage(text){
+  if (!text){ $msg.classList.remove('show'); $msg.textContent=''; return; }
+  $msg.textContent = text;
+  $msg.classList.add('show');
+}
+
+function render(){
+  const N = state.size;
+  $board.style.gridTemplateColumns = `repeat(${N}, 1fr)`;
+  $board.innerHTML = '';
+  for (let r=0;r<N;r++){
+    for (let c=0;c<N;c++){
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      const v = state.board[r][c];
+      if (v){
+        const tile = document.createElement('div');
+        tile.className = `tile v${v}`;
+        tile.innerHTML = `<span>${v}</span>`;
+        cell.appendChild(tile);
+      }
+      $board.appendChild(cell);
+    }
+  }
+  $score.textContent = String(state.score);
+  $best.textContent = String(state.best);
+
+  if (state.won){ setMessage('🎉 You reached 2048! Keep playing or press Restart.'); }
+  else if (state.over){ setMessage('💀 No more moves. Press Restart to try again.'); }
+  else setMessage('');
+}
+
+function restart(N = state.size){
+  state = {
+    size: N,
+    board: initBoard(N),
+    score: 0,
+    best: state.best,
+    won: false,
+    over: false,
+  };
+  $size.value = String(N);
+  render();
+}
+
+function applyMove(fn){
+  if (state.over) return;
+  const {board: movedBoard, moved, scoreDelta} = fn(state.board);
+  if (!moved) return; // ignore no-op moves
+  let next = addRandomTile(movedBoard);
+  const score = state.score + scoreDelta;
+  const best = Math.max(state.best, score);
+  const won = state.won || has2048(next);
+  const over = !won && !anyMovesAvailable(next);
+  state = { ...state, board: next, score, best, won, over };
+  render();
+}
+
+// Buttons
+const byId = (id) => document.getElementById(id);
+byId('btn-up').onclick = () => applyMove(moveUp);
+byId('btn-left').onclick = () => applyMove(moveLeft);
+byId('btn-down').onclick = () => applyMove(moveDown);
+byId('btn-right').onclick = () => applyMove(moveRight);
+byId('restart').onclick = () => restart();
+byId('apply').onclick = () => {
+  const n = Math.max(3, Math.min(8, parseInt($size.value || '4', 10)));
+  restart(n);
+};
+
+// Keyboard
+window.addEventListener('keydown', (e) => {
+  const k = e.key;
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(k)) e.preventDefault();
+  switch(k){
+    case 'ArrowUp': return applyMove(moveUp);
+    case 'ArrowDown': return applyMove(moveDown);
+    case 'ArrowLeft': return applyMove(moveLeft);
+    case 'ArrowRight': return applyMove(moveRight);
+    case 'r': case 'R': return restart();
+  }
+});
+
+// Startup
+render();
+</script>
+</body>
+</html>
